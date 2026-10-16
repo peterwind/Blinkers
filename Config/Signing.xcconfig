@@ -1,0 +1,12 @@
+// Signing for the app and its tests.
+//
+// By default Blinkers is signed to run locally, so anyone can build it.
+// macOS ties the Accessibility permission to the signature, and an ad-hoc
+// signature changes with every build, so you'd have to grant it again each
+// time. To keep it, copy Local.xcconfig.example to Local.xcconfig and add
+// your own team. Local.xcconfig is ignored by git.
+
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

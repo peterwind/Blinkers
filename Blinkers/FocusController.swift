@@ -209,6 +209,7 @@ final class FocusController {
                                duration: Motion.glide, timing: Motion.glideCurve) { [weak self] in
                 self?.finishTransition()
             }
+            curtain.fadeInCorners(around: frame, in: area, duration: Motion.glide, timing: Motion.glideCurve)
         }
     }
 
@@ -234,7 +235,11 @@ final class FocusController {
         isTransitioning = true
         transition.begin(in: area, color: settings.color, opacity: Float(settings.opacity / 100),
                          hole: CurtainTransition.hole(around: frame))
-        curtain.hideImmediately()
+        if wasCentered, saved != nil {
+            curtain.handOver(fadingCornersOver: Motion.cover, timing: Motion.coverCurve)
+        } else {
+            curtain.handOver(fadingCornersOver: Motion.glide, timing: Motion.glideCurve)
+        }
 
         if wasCentered, let saved {
             // Close over the window, send it home unseen, then open from there while fading out.
@@ -270,7 +275,11 @@ final class FocusController {
         isTransitioning = true
         transition.begin(in: area, color: settings.color, opacity: Float(settings.opacity / 100),
                          hole: CurtainTransition.hole(around: frame))
-        curtain.hideImmediately()
+        if settings.centerWindow {
+            curtain.handOver(fadingCornersOver: Motion.cover, timing: Motion.coverCurve)
+        } else {
+            curtain.handOver(fadingCornersOver: Motion.glide, timing: Motion.glideCurve)
+        }
 
         if settings.centerWindow {
             transition.animate(to: CurtainTransition.closed(at: frame), duration: Motion.cover,
@@ -289,6 +298,7 @@ final class FocusController {
                                timing: Motion.glideCurve) { [weak self] in
                 self?.finishTransition()
             }
+            curtain.fadeInCorners(around: newFrame, in: area, duration: Motion.glide, timing: Motion.glideCurve)
         }
     }
 
@@ -306,6 +316,7 @@ final class FocusController {
                            timing: Motion.revealCurve) { [weak self] in
             self?.finishTransition()
         }
+        curtain.fadeInCorners(around: landed, in: area, duration: Motion.reveal, timing: Motion.revealCurve)
     }
 
     /// Hands over from the transition to the real curtain panels.
@@ -538,8 +549,13 @@ final class FocusController {
                 guard let self else { return }
                 self.lastExternalApp = app
                 if self.isTrusted { self.watcher.follow(app) }
-                // Activating an app raises its windows above the corner panel.
-                if self.target?.pid == pid { self.curtain.orderCornersBehindWindow() }
+                if self.target?.pid == pid {
+                    // Activating an app raises its windows above the corner panel.
+                    self.curtain.orderCornersBehindWindow()
+                } else if self.isActive {
+                    // Switched to another app (Dock, ⌘⇥, …): focus is over.
+                    self.turnOff()
+                }
             }
         })
 

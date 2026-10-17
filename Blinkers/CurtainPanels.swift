@@ -7,7 +7,10 @@ import AppKit
 /// which the frame panels can't reach without covering the window itself.
 final class CurtainPanels {
     private let panels: [CurtainPanel]
-    private let corners = CornerPanel()
+    private var corners = CornerPanel()
+    /// Takes over the old window's corners while they fade out during a
+    /// transition, so `corners` is free to fade in behind the next window.
+    private var leavingCorners = CornerPanel()
     private var allPanels: [NSPanel] { panels + [corners] }
     private var opacity: CGFloat = 1
     private(set) var isShown = false
@@ -24,6 +27,7 @@ final class CurtainPanels {
         self.opacity = CGFloat(opacity / 100)
         panels.forEach { $0.backgroundColor = color }
         corners.color = color
+        leavingCorners.color = color
         if isShown { allPanels.forEach { $0.alphaValue = self.opacity } }
     }
 
@@ -64,12 +68,58 @@ final class CurtainPanels {
         }
     }
 
+    /// Hands the curtain over to a `CurtainTransition`: the frame panels go at
+    /// once, while the window's corners fade out in step with the transition
+    /// instead of flashing bright as it begins.
+    func handOver(fadingCornersOver duration: TimeInterval, timing: CAMediaTimingFunction) {
+        isShown = false
+        generation += 1
+        panels.forEach { $0.orderOut(nil) }
+        swap(&corners, &leavingCorners)
+        corners.orderOut(nil)
+        corners.alphaValue = 0
+        let leaving = leavingCorners
+        guard leaving.isVisible else { return }
+        fade(leaving, to: 0, duration: duration, timing: timing) { leaving.orderOut(nil) }
+    }
+
+    /// Fades the corner fill in behind the window while a transition opens
+    /// around it, so its corners darken along with the transition's curtain
+    /// rather than all at once when the frame panels take over.
+    func fadeInCorners(around window: CGRect, in area: CGRect, duration: TimeInterval,
+                       timing: CAMediaTimingFunction) {
+        let frame = window.intersection(area).integral
+        guard let windowID, !frame.isEmpty else { return }
+        corners.setFrame(frame, display: true)
+        corners.alphaValue = 0
+        corners.order(.below, relativeTo: Int(windowID))
+        fade(corners, to: opacity, duration: duration, timing: timing)
+    }
+
+    private func fade(_ panel: CornerPanel, to alpha: CGFloat, duration: TimeInterval,
+                      timing: CAMediaTimingFunction, then completion: (@MainActor () -> Void)? = nil) {
+        panel.fadeID += 1
+        let id = panel.fadeID
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = timing
+            panel.animator().alphaValue = alpha
+        } completionHandler: {
+            MainActor.assumeIsolated {
+                // A newer fade or show owns the panel now.
+                guard panel.fadeID == id else { return }
+                completion?()
+            }
+        }
+    }
+
     /// Shows the curtain. Without `fading` it appears at full strength at once,
     /// which is how a `CurtainTransition` hands over when it finishes.
     func show(around window: CGRect, in area: CGRect, fading: Bool = true) {
         generation += 1
         let wasShown = isShown
         isShown = true
+        corners.fadeID += 1
         if !wasShown { allPanels.forEach { $0.alphaValue = fading ? 0 : opacity } }
         layout(around: window, in: area)
         orderCornersBehindWindow()
@@ -90,6 +140,7 @@ final class CurtainPanels {
         guard isShown else { return }
         isShown = false
         generation += 1
+        corners.fadeID += 1
         let current = generation
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Settings.fadeDuration
@@ -108,6 +159,7 @@ final class CurtainPanels {
         isShown = false
         generation += 1
         allPanels.forEach { $0.orderOut(nil) }
+        leavingCorners.orderOut(nil)
     }
 }
 
@@ -116,16 +168,18 @@ final class CurtainPanels {
 /// Core Animation runs it in the window server at the display's frame rate.
 ///
 /// The four `CurtainPanels` take over once it's done, since they let clicks
-/// reach the window and fill its corners from behind.
+/// reach the window. Their corner fill sits behind the window throughout and
+/// fades along with the transition.
 final class CurtainTransition {
     private let panel: NSPanel
     private let shape = CAShapeLayer()
     private var area: CGRect = .zero
     private var generation = 0
 
-    /// Corner radius of a hole that frames a window. Smaller than any system
-    /// window's, so the hole never cuts into the window itself.
-    static let windowRadius: CGFloat = 10
+    /// Corner radius of a hole that frames a window. Square, like the frame
+    /// panels: the corner fill behind the window paints its rounded corners, so
+    /// the end of a move looks exactly like the curtain that takes over.
+    static let windowRadius: CGFloat = 0
 
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -259,6 +313,8 @@ final class CurtainTransition {
 /// always includes the real corners whatever radius the app uses. The thin
 /// overlap with the window's own corner area is hidden behind the window.
 private final class CornerPanel: NSPanel {
+    /// Bumped on every fade, so a finished one can't act on a newer state.
+    var fadeID = 0
     var color: NSColor = .black {
         didSet { contentView?.needsDisplay = true }
     }

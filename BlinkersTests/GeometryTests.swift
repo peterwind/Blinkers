@@ -49,40 +49,22 @@ struct LayoutTests {
         #expect(frame == CGRect(x: 3040, y: 92, width: 960, height: 976))
     }
 
-    @Test func curtainCoversEverythingButTheWindow() {
+    @Test func closedHoleSitsInTheMiddleOfTheWindow() {
         let window = CGRect(x: 512, y: 12, width: 1536, height: 1391)
-        let frames = CurtainPanels.frames(around: window, in: area)
-        #expect(frames == [
-            CGRect(x: 0, y: 0, width: 512, height: 1415),
-            CGRect(x: 2048, y: 0, width: 512, height: 1415),
-            CGRect(x: 512, y: 1403, width: 1536, height: 12),
-            CGRect(x: 512, y: 0, width: 1536, height: 12),
-        ])
-        let covered = frames.reduce(0) { $0 + $1.width * $1.height } + window.width * window.height
-        #expect(covered == area.width * area.height)
+        let hole = CurtainSurface.closed(at: window)
+        #expect(window.contains(hole.rect))
+        #expect(hole.rect.midX == window.midX && hole.rect.midY == window.midY)
     }
 
-    @Test func fullWidthWindowLeavesOnlyTopAndBottom() {
-        let window = CGRect(x: 0, y: 12, width: 2560, height: 1391)
-        let frames = CurtainPanels.frames(around: window, in: area)
-        #expect(frames[0] == .zero)
-        #expect(frames[1] == .zero)
-        #expect(frames[2].height == 12)
-        #expect(frames[3].height == 12)
+    @Test func holeAroundWindowCoversItsCorners() {
+        let window = CGRect(x: 512, y: 12, width: 1536, height: 1391)
+        let hole = CurtainSurface.hole(around: window)
+        #expect(hole.rect == window)
+        #expect(hole.radius >= 12)
     }
 
-    @Test func windowPartlyOffScreenIsClipped() {
-        let window = CGRect(x: -100, y: 12, width: 600, height: 1391)
-        let frames = CurtainPanels.frames(around: window, in: area)
-        #expect(frames[0] == .zero)
-        #expect(frames[1] == CGRect(x: 500, y: 0, width: 2060, height: 1415))
-    }
-
-    @Test func windowOutsideAreaIsFullyCovered() {
-        let window = CGRect(x: 3000, y: 0, width: 500, height: 500)
-        let frames = CurtainPanels.frames(around: window, in: area)
-        let covered = frames.reduce(0) { $0 + $1.width * $1.height }
-        #expect(covered == area.width * area.height)
+    @Test func openHoleLeavesNothingCovered() {
+        #expect(CurtainSurface.open(around: area).rect.contains(area))
     }
 }
 

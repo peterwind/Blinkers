@@ -37,7 +37,7 @@ Run the tests with ⌘U.
 
 ## How it works
 
-Blinkers moves windows through the Accessibility API and draws the frame as borderless panels of its own. Window moves through Accessibility can't be animated smoothly, so the frame does the moving: it closes over the window, the window jumps out of sight, and the frame opens again around its new place. All of that runs in Core Animation, with no extra permissions.
+Blinkers moves windows through the Accessibility API and dims the screen with a borderless panel of its own, placed directly behind the focused window. The window, its rounded corners and its shadow sit on top of the dark area, just as they would on the desktop. Window moves through Accessibility can't be animated smoothly, so the curtain does the moving: a second panel above everything closes over the window, the window jumps out of sight, and the curtain opens again around its new place. All of that runs in Core Animation, with no extra permissions.
 
 ## License
 

@@ -29,7 +29,7 @@ final class FocusController {
     @ObservationIgnored private var lastExternalApp: NSRunningApplication?
     @ObservationIgnored private var trustTimer: Timer?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
-    @ObservationIgnored private lazy var curtain = CurtainPanels { [weak self] in self?.turnOff() }
+    @ObservationIgnored private lazy var backdrop = Backdrop { [weak self] in self?.turnOff() }
     @ObservationIgnored private let transition = CurtainTransition()
     @ObservationIgnored private let watcher = FrontWindowWatcher()
     @ObservationIgnored private let notice = ConflictNotice()
@@ -162,14 +162,14 @@ final class FocusController {
         isActive = false
         target?.stopObserving()
         if centeredByUs, let target, let savedFrame { move(target, to: savedFrame) }
-        curtain.hideImmediately()
+        backdrop.end()
     }
 
     /// Re-applies the settings while focus is active. Changes apply at once,
     /// without moves, so sliders follow the hand.
     func settingsChanged() {
         let settings = Settings.current
-        curtain.setAppearance(color: settings.color, opacity: settings.opacity)
+        backdrop.setAppearance(color: settings.color, opacity: Float(settings.opacity / 100))
         guard isActive, !isTransitioning, let target, let screen else { return }
 
         if settings.centerWindow {
@@ -179,7 +179,7 @@ final class FocusController {
             restore(target, to: savedFrame)
             centeredByUs = false
         }
-        if let frame = target.frame { curtain.layout(around: frame, in: curtainArea(of: screen)) }
+        backdrop.move(to: curtainArea(of: screen))
         persistRecovery()
     }
 
@@ -189,7 +189,6 @@ final class FocusController {
         isActive = true
         begin(window)
         let settings = Settings.current
-        curtain.setAppearance(color: settings.color, opacity: settings.opacity)
         guard let screen, let frame = window.frame else { return }
         let area = curtainArea(of: screen)
         let opacity = Float(settings.opacity / 100)
@@ -197,19 +196,19 @@ final class FocusController {
         isTransitioning = true
         if settings.centerWindow {
             // Fade in while the hole closes over the window, jump it unseen, open around its new place.
-            transition.begin(in: area, color: settings.color, opacity: 0, hole: CurtainTransition.hole(around: frame))
-            transition.animate(to: CurtainTransition.closed(at: frame), opacity: opacity,
+            transition.begin(in: area, color: settings.color, opacity: 0, hole: CurtainSurface.hole(around: frame))
+            transition.animate(to: CurtainSurface.closed(at: frame), opacity: opacity,
                                duration: Motion.cover, timing: Motion.coverCurve) { [weak self] in
                 self?.revealCentered(in: area)
             }
         } else {
-            // The curtain closes in from the screen's edges and stops around the window.
-            transition.begin(in: area, color: settings.color, opacity: 0, hole: CurtainTransition.open(around: area))
-            transition.animate(to: CurtainTransition.hole(around: frame), opacity: opacity,
-                               duration: Motion.glide, timing: Motion.glideCurve) { [weak self] in
-                self?.finishTransition()
+            // The curtain closes in from the screen's edges and on behind the
+            // window, so its edge doesn't slow down at the window's.
+            backdrop.begin(in: area, color: settings.color, opacity: 0, hole: CurtainSurface.open(around: area))
+            backdrop.animate(to: CurtainSurface.closed(at: frame), opacity: opacity,
+                             duration: Motion.glide, timing: Motion.glideCurve) { [weak self] in
+                self?.finishGlide()
             }
-            curtain.fadeInCorners(around: frame, in: area, duration: Motion.glide, timing: Motion.glideCurve)
         }
     }
 
@@ -224,40 +223,34 @@ final class FocusController {
         isActive = false
         guard let target, let frame = target.frame, let screen else {
             releaseTarget()
-            curtain.hide()
+            backdrop.fadeOut(duration: Settings.fadeDuration)
             return persistRecovery()
         }
         let area = curtainArea(of: screen)
         let settings = Settings.current
-        let wasCentered = centeredByUs
-        let saved = savedFrame
 
         isTransitioning = true
-        transition.begin(in: area, color: settings.color, opacity: Float(settings.opacity / 100),
-                         hole: CurtainTransition.hole(around: frame))
-        if wasCentered, saved != nil {
-            curtain.handOver(fadingCornersOver: Motion.cover, timing: Motion.coverCurve)
-        } else {
-            curtain.handOver(fadingCornersOver: Motion.glide, timing: Motion.glideCurve)
-        }
-
-        if wasCentered, let saved {
+        if centeredByUs, let saved = savedFrame {
             // Close over the window, send it home unseen, then open from there while fading out.
-            transition.animate(to: CurtainTransition.closed(at: frame), duration: Motion.cover,
+            transition.begin(in: area, color: settings.color, opacity: Float(settings.opacity / 100),
+                             hole: CurtainSurface.hole(around: frame))
+            backdrop.end()
+            transition.animate(to: CurtainSurface.closed(at: frame), duration: Motion.cover,
                                timing: Motion.coverCurve) { [weak self] in
                 guard let self else { return }
                 self.releaseTarget()
-                self.transition.set(hole: CurtainTransition.closed(at: saved))
-                self.transition.animate(to: CurtainTransition.open(around: area), opacity: 0,
+                self.transition.set(hole: CurtainSurface.closed(at: saved))
+                self.transition.animate(to: CurtainSurface.open(around: area), opacity: 0,
                                         duration: Motion.reveal, timing: Motion.revealCurve) { [weak self] in
                     self?.endTransition()
                 }
             }
         } else {
-            // The window stays put; the curtain draws back to the screen's edges.
+            // The window stays put; the curtain opens from behind it out to the screen's edges.
             releaseTarget()
-            transition.animate(to: CurtainTransition.open(around: area), opacity: 0,
-                               duration: Motion.glide, timing: Motion.glideCurve) { [weak self] in
+            backdrop.set(hole: CurtainSurface.closed(at: frame))
+            backdrop.animate(to: CurtainSurface.open(around: area), opacity: 0,
+                             duration: Motion.glide, timing: Motion.glideCurve) { [weak self] in
                 self?.endTransition()
             }
         }
@@ -273,16 +266,11 @@ final class FocusController {
         let settings = Settings.current
 
         isTransitioning = true
-        transition.begin(in: area, color: settings.color, opacity: Float(settings.opacity / 100),
-                         hole: CurtainTransition.hole(around: frame))
         if settings.centerWindow {
-            curtain.handOver(fadingCornersOver: Motion.cover, timing: Motion.coverCurve)
-        } else {
-            curtain.handOver(fadingCornersOver: Motion.glide, timing: Motion.glideCurve)
-        }
-
-        if settings.centerWindow {
-            transition.animate(to: CurtainTransition.closed(at: frame), duration: Motion.cover,
+            transition.begin(in: area, color: settings.color, opacity: Float(settings.opacity / 100),
+                             hole: CurtainSurface.hole(around: frame))
+            backdrop.end()
+            transition.animate(to: CurtainSurface.closed(at: frame), duration: Motion.cover,
                                timing: Motion.coverCurve) { [weak self] in
                 guard let self else { return }
                 self.releaseTarget()
@@ -290,15 +278,17 @@ final class FocusController {
                 self.revealCentered(in: area)
             }
         } else {
-            // The hole travels from one window to the other.
+            // The new window comes in front of the backdrop. The old one, now
+            // behind it, is covered by the hole closing in on its way to the new one.
             releaseTarget()
             begin(window)
-            guard let newFrame = window.frame else { return finishTransition() }
-            transition.animate(to: CurtainTransition.hole(around: newFrame), duration: Motion.glide,
-                               timing: Motion.glideCurve) { [weak self] in
-                self?.finishTransition()
+            guard let newFrame = window.frame else { return finishGlide() }
+            backdrop.set(hole: CurtainSurface.hole(around: frame))
+            backdrop.orderBehindWindow()
+            backdrop.animate(to: CurtainSurface.closed(at: newFrame), duration: Motion.glide,
+                             timing: Motion.glideCurve) { [weak self] in
+                self?.finishGlide()
             }
-            curtain.fadeInCorners(around: newFrame, in: area, duration: Motion.glide, timing: Motion.glideCurve)
         }
     }
 
@@ -306,33 +296,43 @@ final class FocusController {
     private func revealCentered(in area: CGRect) {
         guard isActive, let landed = moveToCenter() else {
             // The window went away while covered.
-            return transition.animate(to: CurtainTransition.open(around: area), opacity: 0,
+            return transition.animate(to: CurtainSurface.open(around: area), opacity: 0,
                                       duration: Motion.glide, timing: Motion.glideCurve) { [weak self] in
                 self?.endTransition()
             }
         }
-        transition.set(hole: CurtainTransition.closed(at: landed))
-        transition.animate(to: CurtainTransition.hole(around: landed), duration: Motion.reveal,
+        transition.set(hole: CurtainSurface.closed(at: landed))
+        transition.animate(to: CurtainSurface.hole(around: landed), duration: Motion.reveal,
                            timing: Motion.revealCurve) { [weak self] in
             self?.finishTransition()
         }
-        curtain.fadeInCorners(around: landed, in: area, duration: Motion.reveal, timing: Motion.revealCurve)
     }
 
-    /// Hands over from the transition to the real curtain panels.
+    /// Hands over from the transition above the window to the backdrop behind it.
     private func finishTransition() {
-        guard isActive, let target, let frame = target.frame, let screen else { return endTransition() }
-        curtain.show(around: frame, in: curtainArea(of: screen), fading: false)
+        guard isActive, let screen else { return endTransition() }
+        let settings = Settings.current
+        backdrop.begin(in: curtainArea(of: screen), color: settings.color,
+                       opacity: Float(settings.opacity / 100), hole: nil)
         persistRecovery()
-        // The real panels are on screen now; remove the transition a beat later
+        // The backdrop is on screen now; remove the transition a beat later
         // so there's never a frame with neither.
         let run = transition.run
         Task { [transition] in transition.end(run: run) }
         transitionEnded()
     }
 
+    /// The backdrop's hole has closed behind the window: drop it for good.
+    private func finishGlide() {
+        guard isActive else { return endTransition() }
+        backdrop.set(hole: nil)
+        persistRecovery()
+        transitionEnded()
+    }
+
     private func endTransition() {
         transition.end()
+        if !isActive { backdrop.end() }
         transitionEnded()
     }
 
@@ -361,7 +361,7 @@ final class FocusController {
         centeredByUs = false
         screen = Self.screen(containing: savedFrame) ?? NSScreen.main
         _ = window.windowID // Look it up while the window is still where the window server last saw it.
-        curtain.windowID = window.windowID
+        backdrop.windowID = window.windowID
         window.startObserving { [weak self] event in self?.handle(event) }
     }
 
@@ -467,7 +467,7 @@ final class FocusController {
         // The window was dragged to another screen: the curtain moves with it.
         if let newScreen = Self.screen(containing: frame) { screen = newScreen }
         guard let screen else { return }
-        curtain.layout(around: frame, in: curtainArea(of: screen))
+        backdrop.move(to: curtainArea(of: screen))
         persistRecovery()
     }
 
@@ -489,7 +489,7 @@ final class FocusController {
         savedFrame = nil
         guard isActive else { return }
         isActive = false
-        curtain.hide()
+        backdrop.fadeOut(duration: Settings.fadeDuration)
         persistRecovery()
     }
 
@@ -550,8 +550,8 @@ final class FocusController {
                 self.lastExternalApp = app
                 if self.isTrusted { self.watcher.follow(app) }
                 if self.target?.pid == pid {
-                    // Activating an app raises its windows above the corner panel.
-                    self.curtain.orderCornersBehindWindow()
+                    // Activating an app raises its windows above the backdrop.
+                    self.backdrop.orderBehindWindow()
                 } else if self.isActive {
                     // Switched to another app (Dock, ⌘⇥, …): focus is over.
                     self.turnOff()
